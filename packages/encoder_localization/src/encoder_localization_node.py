@@ -6,7 +6,6 @@ from duckietown_msgs.msg import Twist2DStamped, WheelEncoderStamped, WheelsCmdSt
 from geometry_msgs.msg import TransformStamped, Quaternion, Vector3, Transform
 from tf.transformations import quaternion_from_matrix
 import tf
-import rospkg
 
 from geometry import SE2_from_xytheta, rotation_translation_from_SE3, SE3_from_SE2
 
@@ -22,10 +21,9 @@ class EncoderLocalizationNode(DTROS):
         self.veh_name = rospy.get_namespace().strip("/")
         self.radius = rospy.get_param(f'/{self.veh_name}/kinematics_node/radius', 100)
         self.baseline = 0.0968
-        init_pose = SE2_from_xytheta([0.5, 0, np.pi])
-        self.db_kinematics = DuckiebotKinematics(radius=self.radius, baseline=self.baseline, pose=init_pose)
-        rospack = rospkg.RosPack()
-
+        x_init = rospy.get_param(f'/{self.veh_name}/{node_name}/x_init', 100)
+        self.pose = SE2_from_xytheta([x_init, 0, np.pi])
+        self.db_kinematics = DuckiebotKinematics(radius=self.radius, baseline=self.baseline)
         self.vel_left = 0.0
         self.vel_right = 0.0
         self.encoder_ticks_left_total = 0
@@ -34,7 +32,7 @@ class EncoderLocalizationNode(DTROS):
         self.encoder_ticks_right_delta_t = 0
         self.encoder_timestamp = rospy.Time.now()
         self.max_number_ticks = 135
-        init_pose_SE3 = SE3_from_SE2(init_pose)
+        init_pose_SE3 = SE3_from_SE2(self.pose)
         rot, trans = rotation_translation_from_SE3(init_pose_SE3)
         quaternion_tf = quaternion_from_matrix(init_pose_SE3)
         quaternion = Quaternion(quaternion_tf[0], quaternion_tf[1], quaternion_tf[2], quaternion_tf[3])
@@ -60,25 +58,25 @@ class EncoderLocalizationNode(DTROS):
     def callback_right(self, data):
         self.encoder_timestamp = data.header.stamp
         if self.vel_right == 0.0:
-            self.encoder_ticks_right_delta_t = 0
+            self.encoder_ticks_right_delta_t += 0
             self.encoder_ticks_right_total = data.data + 1
         else:
             delta = data.data - self.encoder_ticks_right_total
             if delta > 3 or delta < -3:
                 delta = 0
-            self.encoder_ticks_right_delta_t = max(min(3, delta), -3)
+            self.encoder_ticks_right_delta_t += max(min(3, delta), -3)
             self.encoder_ticks_right_total = data.data
 
     def callback_left(self, data):
         self.encoder_timestamp = data.header.stamp
         if self.vel_left == 0.0:
-            self.encoder_ticks_left_delta_t = 0
+            self.encoder_ticks_left_delta_t += 0
             self.encoder_ticks_left_total = data.data + 1
         else:
             delta = data.data - self.encoder_ticks_left_total
             if delta > 3 or delta < -3:
                 delta = 0
-            self.encoder_ticks_left_delta_t = max(min(3, delta), -3)
+            self.encoder_ticks_left_delta_t += max(min(3, delta), -3)
             self.encoder_ticks_left_total = data.data
 
     def cb_executed_commands(self, data):
@@ -89,8 +87,10 @@ class EncoderLocalizationNode(DTROS):
         super(EncoderLocalizationNode, self).onShutdown()
 
     def run(self, event=None):
-        self.db_kinematics.step(self.encoder_ticks_left_delta_t, self.encoder_ticks_right_delta_t, dt=0.1)
-        pose_SE3 = SE3_from_SE2(self.db_kinematics.configuration.pose)
+        self.pose = self.db_kinematics.step(self.encoder_ticks_left_delta_t, self.encoder_ticks_right_delta_t, self.pose)
+        self.encoder_ticks_right_delta_t = 0
+        self.encoder_ticks_left_delta_t = 0
+        pose_SE3 = SE3_from_SE2(self.pose)
         rot, trans = rotation_translation_from_SE3(pose_SE3)
         quaternion_tf = quaternion_from_matrix(pose_SE3)
         quaternion = Quaternion(quaternion_tf[0], quaternion_tf[1], quaternion_tf[2], quaternion_tf[3])
@@ -111,5 +111,6 @@ if __name__ == '__main__':
     # Initialize the node
     encoder_node = EncoderLocalizationNode(node_name='encoder_localization_node')
     timer = rospy.Timer(rospy.Duration(1.0 / 30.0), encoder_node.run)
+    rospy.on_shutdown(encoder_node.onShutdown)
     # Keep it spinning to keep the node alive
     rospy.spin()

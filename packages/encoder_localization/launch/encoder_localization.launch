@@ -2,8 +2,10 @@
   <arg name="veh"/>
   <arg name="pkg_name" value="encoder_localization"/>
   <arg name="node_name" default="encoder_localization_node"/>
+  <arg name="x_init" default="0.5" doc="The initial x position estimate in meter of duckiebot in front of map frame" />
   <group ns="$(arg veh)">
     <node pkg="$(arg pkg_name)" type="$(arg node_name).py" name="$(arg node_name)" output="screen">
+        <param name="x_init" type="double" value="$(arg x_init)" />
     </node>
   </group>
 
